@@ -1,0 +1,6 @@
+data/
+install/
+result/
+src/yolact_edge/
+src/yolov5/
+test/
