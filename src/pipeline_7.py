@@ -1,7 +1,7 @@
 import sys
 import os
 import re
-base_path = '/data/xuxiang/beilu'
+base_path = '/data/guanyuqi/beilu'
 sys.path.append(os.path.join(base_path, 'src/yolact_edge'))
 
 # for yolact_edge
