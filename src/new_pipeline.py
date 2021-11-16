@@ -1,0 +1,248 @@
+import sys
+import os
+base_path = '/data/xuxiang/beilu'
+sys.path.append(os.path.join(base_path, 'src/yolact_edge'))
+
+# for yolact_edge
+from yolact_edge.data import COCODetection, YoutubeVIS, get_label_map, MEANS, COLORS
+from yolact_edge.data import cfg, set_cfg, set_dataset
+from yolact_edge.yolact import Yolact
+from yolact_edge.utils.augmentations import BaseTransform, BaseTransformVideo, FastBaseTransform, Resize
+from yolact_edge.utils.functions import MovingAverage, ProgressBar
+from yolact_edge.layers.box_utils import jaccard, center_size
+from yolact_edge.utils import timer
+from yolact_edge.utils.functions import SavePath
+from yolact_edge.layers.output_utils import postprocess, undo_image_transformation
+from yolact_edge.utils.tensorrt import convert_to_tensorrt
+from eval import str2bool, parse_args, Detections, prep_coco_cats
+
+import time
+import numpy as np
+import torch
+import torch.backends.cudnn as cudnn
+import cv2
+import logging
+import math
+
+class Pipeline():
+    def __init__(self):
+        cudnn.benchmark = True
+        cudnn.fastest = True
+        torch.set_default_tensor_type('torch.cuda.FloatTensor')
+        self.yolact_edge_init()
+    
+    def yolact_edge_init(self):
+        self.args = parse_args()
+        # self.args.trained_model = os.path.join(base_path, 'model','yolact_edge_beilu_all_mobilenetv2_382_80000.pth')
+        self.args.trained_model = os.path.join('/nas/xuxiang/YOLACT_pretrained_model','yolact_beilu_all_384_40000.pth')
+        # self.args.trained_model = os.path.join('/nas/xuxiang/YOLACT_pretrained_model','yolact_beilu_all_96_10000.pth')
+        self.args.use_tensorrt_safe_mode = True
+        # self.args.disable_tensorrt = True
+        self.args.benchmark = True
+        self.args.config = 'yolact_edge_beilu_all_config' # 'yolact_edge_beilu_all_mobilenetv2_config' #
+        self.args.score_threshold = 0.15
+        set_cfg(self.args.config)
+
+        ### added:
+        # if os.path.exists(self.args.trained_model):
+        #     dir_path = '/'.join(self.args.trained_model.split('/')[:-1])
+        #     file_name = self.args.trained_model.split('/')[-1]
+        #     for f in os.listdir(dir_path):
+        #         if len(f)>len(file_name) and f[:len(file_name)] == file_name and f[len(file_name)] == '.' and f[-3:] == 'trt':
+        #             os.remove(os.path.join(dir_path,f))
+
+        from yolact_edge.utils.logging_helper import setup_logger
+        setup_logger(logging_level=logging.INFO)
+        logger = logging.getLogger("yolact.eval")
+
+        with torch.no_grad():
+            logger.info('Loading model...')
+            self.yolact = Yolact(training=False)
+            self.yolact.load_weights(self.args.trained_model, args=self.args)
+            self.yolact.eval()
+            logger.info('Model loaded.')
+
+            convert_to_tensorrt(self.yolact, cfg, self.args, transform=BaseTransform())
+            if self.args.cuda:
+                self.yolact = self.yolact.cuda()
+
+            self.yolact.detect.use_fast_nms = self.args.fast_nms
+            cfg.mask_proto_debug = self.args.mask_proto_debug
+
+        return
+
+    def yolact_detect(self, img):
+        h, w, _ = img.shape
+        frame = torch.from_numpy(img).cuda().float()
+        batch = FastBaseTransform()(frame.unsqueeze(0))
+
+        # extras = {"backbone": "full", "interrupt": False, "keep_statistics": False, "moving_statistics": None} #108
+        extras = {"backbone": "full", "interrupt": False, "moving_statistics": {"aligned_feats": []}}
+        preds = self.yolact(batch, extras=extras)["pred_outs"]
+        
+        t = postprocess(preds, w, h, crop_masks = self.args.crop, score_threshold = self.args.score_threshold)
+        top_k = 8
+        classes, scores, boxes, masks = [x[:top_k].detach().cpu().numpy() for x in t]
+        torch.cuda.synchronize()
+        # print(classes)
+        # 分类处理
+        dlc_masks, person_masks, person_boxes = [], [], []
+        for i in range(len(classes)):
+            if classes[i] == 0:
+                dlc_masks.append(masks[i])
+            elif classes[i] == 1:
+                person_masks.append(masks[i])
+                person_boxes.append(boxes[i])
+        
+        return dlc_masks, person_masks, person_boxes
+    
+    def single_img_visual(self, img, mask, boxes, show=False):
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        if len(boxes) > 0:
+            for box in boxes:
+                cv2.rectangle(img, (int(box[0]), int(box[1])),(int(box[2]), int(box[3])),(0, 255, 0), 3)
+        if mask is not None:
+            mask = mask.astype(np.uint8)
+            mask = np.stack([mask, mask*255, mask]).transpose(1, 2, 0)
+            img = cv2.addWeighted(img, 0.77, mask, 0.23, -1)
+        if show:
+            cv2.imshow('pipeline', img)
+            cv2.resizeWindow('pipeline', 1080, 720)
+            if cv2.waitKey(1) == 27:
+                return  # esc to quit
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+        return img
+    
+def inflation_corrosion(mask , threshold_point , area ):
+    kernel = np.ones(area , np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+    return mask
+
+def contours_approx(mask , img , min_epsilon):
+    approx = []
+    contours, hierarchy = cv2.findContours(mask,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_NONE) 
+    if len(contours) <= 0:
+        result_img = cv2.putText(img, 'safe' , (10,200 ), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 0), 4)
+        return result_img , approx
+    max_len = 0
+    cnt = []
+    for i in range(len(contours)):
+        if max_len < len(contours[i]):
+            max_len = len(contours[i])
+            cnt = contours[i]
+    if len(cnt) <= 0:
+        result_img = cv2.putText(img, 'safe' , (10,200 ), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 0), 4)
+        return result_img , approx
+    else :
+        approx1 = cv2.approxPolyDP(cnt, min_epsilon, True)
+        return img , approx1
+
+def handle_approx_line(approx , img , boxes ):
+    [vx, vy, x, y] = cv2.fitLine(approx, cv2.DIST_L2, 0, 0.01, 0.01)
+    rows, cols = img.shape[:2]
+    if vx == 0 :
+        vx += 0.0001
+    if vy == 0 :
+        vy += 0.0001
+    k = vy/vx 
+    b = y - k * x
+    left_y = int((-x*vy/vx) + y)
+    right_y = int(((cols-x)*vy/vx) + y)
+    top_x = int(x - y*vx/vy)
+    bottom_x = int(x + (rows - y)*vx/vy)
+    cv2.line(img, (top_x, 0), (bottom_x, rows - 1), (0, 255, 0), 4)
+
+    right = 0
+    for each_point in approx :
+        if each_point[0][0] > math.floor(cols / 2) :
+            right += 1
+    if right > math.floor(len(approx) / 2) :
+        flag = "right"
+    else :
+        flag = 'left'
+    if left_y > 0 and left_y < rows and right_y > 0 and right_y < rows :
+        flag = "below"
+    elif k < 0 and top_x > math.floor(cols / 2) and top_x < cols and bottom_x > 0 and bottom_x < cols :
+        flag = "right"
+    elif k < 0 and bottom_x > 0 and bottom_x < cols and right_y > 0 and right_y < rows :
+        flag = "right"
+    elif k > 0 and top_x > 0 and top_x < math.floor(cols / 2) and bottom_x > 0 and bottom_x < cols :
+        flag = "left"
+    elif k > 0 and bottom_x > 0 and bottom_x < cols and left_y > 0 and left_y < rows :
+        flag = "left"
+
+    warning_tag = 'safe'
+    if boxes is not None :
+        for box in boxes :
+            piont2 = (int((box[0]+box[2]) / 2 ) , box[3] )
+            judeg_pos = {'left': 1 , 'right': -1}
+            if flag == "below" :
+                if k * piont2[0] + b > piont2[1] :
+                    warning_tag = 'warning'
+                    break
+            elif flag == 'left' or flag == 'right' :
+                if judeg_pos[flag]*(( piont2[1] - b ) / k - piont2[0]) < 0 :
+                    warning_tag = 'warning'
+                    break
+    if warning_tag == 'safe' :
+        result_img = cv2.putText(img, 'safe' , (10,200 ), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 0), 4)
+    else :
+        result_img = cv2.putText(img, 'warning' , (10,200 ), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 255), 4)
+    if flag is not None:
+        result_img = cv2.putText(result_img, flag , (10,150 ), cv2.FONT_HERSHEY_SIMPLEX, 2, (255, 255, 255), 4)
+    return result_img
+
+def post_process(img , mask, boxes):
+    if mask is None :
+        result_img = cv2.putText(img, 'safe' , (10,200 ), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 0), 4)
+        return result_img
+    # if boxes is not None :
+    #     boxes = boxes.numpy()
+    mask = mask.astype(np.uint8)
+    mask *= 255
+    mask = inflation_corrosion(mask , 10 , (10 , 10))        
+    img , approx_res = contours_approx(mask , img , 5)
+    if len(approx_res) <= 0 :
+        return img
+    else :
+        result_img = handle_approx_line(approx_res , img , boxes )
+        return result_img
+   
+if __name__=='__main__':
+    pipeline = Pipeline()
+
+    video_path = r'/nas/datasets/beilu/2.视频识别（17个录像）/017-D5-022-付村-较清晰-电缆槽识别-中途石块覆盖电缆槽多名人员清理.mp4'
+    video_out_path = r'/nas/datasets/beilu/new_out_video_017_res101_384_0.15.mp4'
+    print("Reading video file...")
+    cam = cv2.VideoCapture(video_path)
+    target_fps   = round(cam.get(cv2.CAP_PROP_FPS))
+    frame_width  = round(cam.get(cv2.CAP_PROP_FRAME_WIDTH)) 
+    frame_height = round(cam.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    num_frames   = round(cam.get(cv2.CAP_PROP_FRAME_COUNT))
+    out = cv2.VideoWriter(video_out_path, cv2.VideoWriter_fourcc(*"mp4v"), target_fps, (frame_width, frame_height))
+    frame_counter = 0
+    timer = 0
+    print("Detecting...")
+    test_flag = True
+    while True:
+        _, img = cam.read()
+        if img is None:
+            break
+        start_time = time.time()
+        dlc_masks, _, person_boxes = pipeline.yolact_detect(img)
+        if frame_counter!=0:
+            timer += time.time()-start_time
+        frame_counter += 1
+        print(frame_counter, end=" ")
+        if len(dlc_masks)>0:
+            dlc_mask = dlc_masks[0]
+        else:
+            dlc_mask = None
+        frame = pipeline.single_img_visual(img, dlc_mask, person_boxes)
+        frame = post_process(frame, dlc_mask, person_boxes)
+        out.write(frame)
+    print('Done.')
+    print("Total time: {}; frames: {}-1; {} ms".format(timer, frame_counter, timer/(frame_counter-1)*1000))
+    cam.release()
+    out.release()
