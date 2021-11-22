@@ -3,9 +3,9 @@ Description:
 FilePath: /beilu/src/Post_import.py
 Autor: Rainche
 Date: 2021-11-16 17:26:07
-LastEditTime: 2021-11-16 22:08:20
+LastEditTime: 2021-11-21 23:05:25
 '''
-from Post_Process import post_process
+from Post_process import Post_processer
 
 import sys
 import os
@@ -148,7 +148,7 @@ def get_file_path(root_path):
             file_list.append(dir_file_path)
     return file_list,dir_list   
 
-def main(pipeline , img , timer ,  timer_post , frame_counter):
+def main(pipeline , post_processer , img , timer ,  timer_post , frame_counter):
     start_time = time.time()
     input_img = img.copy()
     # input_img = histogram(img)
@@ -174,7 +174,7 @@ def main(pipeline , img , timer ,  timer_post , frame_counter):
     frame = pipeline.single_img_visual(img, dlc_mask, person_boxes)
 
     start_time_post = time.time()
-    frame = post_process(frame, dlc_mask, person_boxes)
+    frame = post_processer.post_process(frame, dlc_mask, person_boxes)
     timer_post += time.time()-start_time_post
     return frame , timer ,  timer_post ,  frame_counter
 
@@ -185,13 +185,14 @@ if __name__=='__main__':
     argv_list = re.split(',' , temp)
 
     pipeline = Pipeline()
+    post_processer = Post_processer()
     frame_counter = 0
     timer = 0
     timer_post = 0
 
     if len(argv_list) == 1 and argv_list[0] == 'mov' :
-        argv_list.append(r'/nas/datasets/beilu/2.视频识别（17个录像）/010-20201119-付村-清晰-人员经过支架.mp4')
-        argv_list.append(r'/data/guanyuqi/beilu/result/out_010_randomspotlight3_postmdf_851.mp4')
+        argv_list.append(r'/nas/datasets/beilu/2.视频识别（17个录像）/011-D1-005-清晰-电缆槽识别及多次人员手扶电缆槽外边沿违规.mp4')
+        argv_list.append(r'/data/guanyuqi/beilu/result/011_new.mp4')
     if len(argv_list) >= 3 and argv_list[0] == 'mov' :
         video_path = argv_list[1]
         video_out_path = argv_list[2]
@@ -207,7 +208,7 @@ if __name__=='__main__':
             _, img = cam.read()
             if img is None:
                 break
-            frame , timer ,  timer_post , frame_counter = main(pipeline , img , timer ,  timer_post , frame_counter)
+            frame , timer ,  timer_post , frame_counter = main(pipeline , post_processer , img , timer ,  timer_post , frame_counter)
             frame = cv2.resize(frame, (frame_width, frame_height))
             out.write(frame)
         cam.release()
@@ -225,7 +226,7 @@ if __name__=='__main__':
             img_result_path = img_path.replace(img_in_path , img_out_path)
             if img is None:
                 break
-            frame , timer ,  timer_post , frame_counter = main(pipeline , img , timer ,  timer_post , frame_counter)
+            frame , timer ,  timer_post , frame_counter = main(pipeline , post_processer , img , timer ,  timer_post , frame_counter)
             cv2.imwrite(img_result_path , frame)
     print('Done.')
     if frame_counter > 1 :
