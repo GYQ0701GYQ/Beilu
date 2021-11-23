@@ -3,7 +3,7 @@ Description:
 FilePath: /beilu/src/Post_process.py
 Autor: Rainche
 Date: 2021-11-16 17:25:25
-LastEditTime: 2021-11-22 10:21:17
+LastEditTime: 2021-11-23 19:06:01
 '''
 import cv2
 import numpy as np
@@ -30,26 +30,79 @@ class Post_processer():
         print('Post processer initialized')
 
     def refresh_buffer(self , warning_tag , flag):
+        # empty buffer
         if len(self.warning_info) == 0 and warning_tag is not None :
             self.warning_info.append(warning_tag)
+        # one element
+        elif len(self.warning_info) == 1 and warning_tag is not None :
+            if self.warning_info[0] != warning_tag :
+                temp = self.warning_info[0]
+                self.warning_info.append(warning_tag)
+                warning_tag = temp
+            else :
+                self.warning_info.append(warning_tag)
+        # two or more elements
         elif len(self.warning_info) <= self.buffer_len and warning_tag is not None :
-            if ('safe' in self.warning_info and 'warning' in self.warning_info) or (self.warning_info[0] != warning_tag):
+            if self.warning_info[0] == warning_tag :
+                for i in range(1,len(self.warning_info)) :
+                    self.warning_info[i] = self.warning_info[0]
+                self.warning_info.append(warning_tag)
+            elif self.warning_info[len(self.warning_info) - 1] == warning_tag :
+                for i in range(0,len(self.warning_info)-2) :
+                    if self.warning_info[i] != self.warning_info[len(self.warning_info) - 1] :
+                        self.warning_info[i] = self.warning_info[0]
+                temp = self.warning_info[0]
+                self.warning_info.append(warning_tag)
+                warning_tag = temp
+            else :
+                for i in range(1,len(self.warning_info)) :
+                    self.warning_info[i] = self.warning_info[0]
                 temp = self.warning_info[0]
                 self.warning_info.append(warning_tag)
                 warning_tag = temp
 
+        # empty buffer
         if len(self.area_info) == 0 and flag is not None :
             self.area_info.append(flag)
-        elif len(self.area_info) <= self.buffer_len and flag is not None :
-            if 'below' in self.area_info :
-                if ('left' in  self.area_info) or ('right' in self.area_info) or (self.area_info[0] != flag) :
-                    temp = self.area_info[0]
-                    self.area_info.append(flag)
-                    flag = temp
-            elif ('left' in  self.area_info and 'right' in self.area_info) or (self.area_info[0] != flag) :
+        # one element
+        elif len(self.area_info) == 1 and flag is not None :
+            if self.area_info[0] != flag :
                 temp = self.area_info[0]
                 self.area_info.append(flag)
                 flag = temp
+            else :
+                self.area_info.append(flag)
+        # two or more elements
+        elif len(self.area_info) <= self.buffer_len and flag is not None :
+            if self.area_info[0] == flag :
+                for i in range(1,len(self.area_info)) :
+                    self.area_info[i] = self.area_info[0]
+                self.area_info.append(flag)
+            elif self.area_info[len(self.area_info) - 1] == flag :
+                for i in range(0,len(self.area_info)-2) :
+                    if self.area_info[i] != self.area_info[len(self.area_info) - 1] :
+                        self.area_info[i] = self.area_info[0]
+                temp = self.area_info[0]
+                self.area_info.append(flag)
+                flag = temp
+            else :
+                for i in range(1,len(self.area_info)) :
+                    self.area_info[i] = self.area_info[0]
+                temp = self.area_info[0]
+                self.area_info.append(flag)
+                flag = temp
+        # if len(self.area_info) == 0 and flag is not None :
+        #     self.area_info.append(flag)
+        # elif len(self.area_info) <= self.buffer_len and flag is not None :
+        #     if 'below' in self.area_info :
+        #         if ('left' in  self.area_info) or ('right' in self.area_info) or (self.area_info[0] != flag) :
+        #             temp = self.area_info[0]
+        #             self.area_info.append(flag)
+        #             flag = temp
+        #     elif ('left' in  self.area_info and 'right' in self.area_info) or (self.area_info[0] != flag) :
+        #         temp = self.area_info[0]
+        #         self.area_info.append(flag)
+        #         flag = temp
         return warning_tag , flag
 
     def inflation_corrosion(self , mask , threshold_point , area ):
@@ -153,17 +206,18 @@ class Post_processer():
                         warning_tag = 'warning'
                         break
 
-        if ( warning_tag is not None ) or ( flag is not None ) :
-            old_warning = warning_tag
-            old_flag = flag
-            warning_tag , flag = self.refresh_buffer(warning_tag , flag)
-            __console__ = sys.stdout
-            sys.stdout = self.logger
-            if len(self.area_info) > 0 and len(self.warning_info) > 0 :
-                print('old warning and flag:' , old_warning , old_flag , ' === new buffer : ' , self.warning_info , self.area_info , '=== new result: ' , warning_tag , flag)
-            else :
-                print('old warning and flag:' , old_warning , old_flag  , '=== new result: ' , warning_tag , flag)
-            sys.stdout = __console__
+        # if ( warning_tag is not None ) or ( flag is not None ) :
+        #     old_warning = warning_tag
+        #     old_flag = flag
+        #     warning_tag , flag = self.refresh_buffer(warning_tag , flag)
+        #     __console__ = sys.stdout
+        #     sys.stdout = self.logger
+        #     if len(self.area_info) > 0 and len(self.warning_info) > 0 :
+        #         print('old warning and flag:' , old_warning , old_flag , ' === new buffer : ' , self.warning_info , self.area_info , '=== new result: ' , warning_tag , flag)
+        #     else :
+        #         print('old warning and flag:' , old_warning , old_flag  , '=== new result: ' , warning_tag , flag)
+        #     sys.stdout = __console__
+        
         if warning_tag == 'safe' :
             result_img = cv2.putText(img, 'safe' , (10,200 ), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 0), 4)
         else :
