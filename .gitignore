@@ -1,7 +1,6 @@
-data/
-install/
+
+install/tensorrt-7.2.2.3-cp37-none-linux_x86_64.whl
 result/
 src/yolact_edge/
 src/yolov5/
-test/
 src/__pycache__/
