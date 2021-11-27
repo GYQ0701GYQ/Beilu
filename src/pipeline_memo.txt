@@ -8,3 +8,5 @@ pipeline_5：根据pipeline4，修改两段mask的情况，把面积小的mask�
 pipeline_6：处理mask分两段的问题，小面积mask用0.2的epsion处理，只对mov模式做了修改，函数返回值还需要统一 
 pipeline_7: 1109换的带光斑的模型，根据pipeline_6修改了mask分两段的代码，目前速度正常，以及修复安全区左右位置判断错误的问题，作为第二个交付版本存为pipeline_7，三种输入格式
 new_pipeline_1109：1109换的带光斑的模型，根据pipeline_6修改了mask分两段的代码，目前速度正常，以及修复安全区左右位置判断错误的问题，作为第二个交付版本存为pipeline_7，三种输入格式
+
+Post_process和Post_import进行了前后代码的拆分，增加了中间突然出现几帧错误的缓冲区

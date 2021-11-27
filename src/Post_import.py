@@ -3,7 +3,7 @@ Description:
 FilePath: /beilu/src/Post_import.py
 Autor: Rainche
 Date: 2021-11-16 17:26:07
-LastEditTime: 2021-11-23 16:55:49
+LastEditTime: 2021-11-25 22:12:19
 '''
 from Post_process import Post_processer
 
@@ -191,8 +191,8 @@ if __name__=='__main__':
     timer_post = 0
 
     if len(argv_list) == 1 and argv_list[0] == 'mov' :
-        argv_list.append(r'/nas/datasets/beilu/2.视频识别（17个录像）/011-D1-005-清晰-电缆槽识别及多次人员手扶电缆槽外边沿违规.mp4')
-        argv_list.append(r'/data/guanyuqi/beilu/result/011_new_buffer.mp4')
+        argv_list.append(r'/nas/datasets/beilu/2.视频识别（17个录像）/005-D1-131-付村-清晰-人员调试采煤机-攀爬画面2.mp4')
+        argv_list.append(r'/data/guanyuqi/beilu/result/005_discrete_sample.mp4')
     if len(argv_list) >= 3 and argv_list[0] == 'mov' :
         video_path = argv_list[1]
         video_out_path = argv_list[2]

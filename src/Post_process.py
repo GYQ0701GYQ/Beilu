@@ -3,7 +3,7 @@ Description:
 FilePath: /beilu/src/Post_process.py
 Autor: Rainche
 Date: 2021-11-16 17:25:25
-LastEditTime: 2021-11-23 19:06:01
+LastEditTime: 2021-11-25 22:19:56
 '''
 import cv2
 import numpy as np
@@ -91,18 +91,6 @@ class Post_processer():
                 temp = self.area_info[0]
                 self.area_info.append(flag)
                 flag = temp
-        # if len(self.area_info) == 0 and flag is not None :
-        #     self.area_info.append(flag)
-        # elif len(self.area_info) <= self.buffer_len and flag is not None :
-        #     if 'below' in self.area_info :
-        #         if ('left' in  self.area_info) or ('right' in self.area_info) or (self.area_info[0] != flag) :
-        #             temp = self.area_info[0]
-        #             self.area_info.append(flag)
-        #             flag = temp
-        #     elif ('left' in  self.area_info and 'right' in self.area_info) or (self.area_info[0] != flag) :
-        #         temp = self.area_info[0]
-        #         self.area_info.append(flag)
-        #         flag = temp
         return warning_tag , flag
 
     def inflation_corrosion(self , mask , threshold_point , area ):
@@ -150,7 +138,39 @@ class Post_processer():
             approx1 = cv2.approxPolyDP(cnt, epsilon, True)
             return img , approx1
 
-    def handle_approx_line(self , approx , img , boxes ):
+    def discrete_sample(self , approx_res ) :
+        if len(approx_res) <= 1 :
+            return approx_res
+        # sample_res = sample_res.reshape((-1,2))
+        sample_res = np.squeeze(approx_res)
+        sample_res = sample_res[sample_res[:,-1].argsort()]
+        max_dis = sample_res[-1][1] - sample_res[0][1]
+        interval = int(max_dis / 3)
+        pos1 = 0
+        pos2 = 0
+        for i in range(len(sample_res)) :
+            if sample_res[i][1] >= sample_res[0][1] + interval :
+                pos1 = i
+                break
+        for i in range(pos1 , len(sample_res)) :
+            if sample_res[i][1] >= sample_res[0][1] + 2 * interval :
+                pos2 = i
+                break
+        if (pos2 - pos1) < 2 or (len(sample_res) - pos2) < 3 :
+            return approx_res
+        seq1 = []
+        seq2 = []
+        seq1 = np.random.choice(range(pos1 , pos2), size=int((pos2 - pos1)*2/3), replace=False)
+        seq1 = np.concatenate((range(0,pos1),seq1))
+        seq2 = np.random.choice(range(pos2 , len(sample_res)), size=int((len(sample_res) - pos2)/3), replace=False)
+        # print(list(np.concatenate((seq1,seq2))))
+        final_seq = np.concatenate((seq1,seq2)).astype(np.uint16)
+        # final_points = sample_res[final_seq].unsqueeze(1)
+        final_points = np.expand_dims(sample_res[final_seq], 1)
+        # print('final points' , final_points)
+        return final_points 
+
+    def handle_approx_line(self , approx , img , boxes , compare = False):
         [vx, vy, x, y] = cv2.fitLine(approx, cv2.DIST_L2, 0, 0.01, 0.01)
         rows, cols = img.shape[:2]
         if vx == 0 :
@@ -173,7 +193,10 @@ class Post_processer():
             if y[1] >= 0 and y[1] <= rows:
                 vertex.append(y)
         if len(vertex) >= 2 :
-            cv2.line(img, vertex[0], vertex[1], (0, 255, 0), 4)
+            if compare == False :
+                cv2.line(img, vertex[0], vertex[1], (0, 255, 0), 4)
+            else :
+                cv2.line(img, vertex[0], vertex[1], (255, 0, 0), 4)
         Vertex = np.array(vertex)
 
         midpoint = (Vertex.mean(axis=0)).astype(np.int16)
@@ -235,9 +258,16 @@ class Post_processer():
         mask = mask.astype(np.uint8)
         mask *= 255
         mask = self.inflation_corrosion(mask , 10 , (10 , 10))        
-        img , approx_res = self.contours_approx(mask , img , 5)
+        img , approx_res = self.contours_approx(mask , img , 2)
+        # approx_res = self.discrete_sample(approx_res)
         if len(approx_res) <= 0 :
             return img
         else :
-            result_img = self.handle_approx_line(approx_res , img , boxes )
-            return result_img
+            result_img = self.handle_approx_line(approx_res , img , boxes ,False)
+            # return result_img
+            approx_res = self.discrete_sample(approx_res)
+            if len(approx_res) <= 0 :
+                return result_img
+            else :
+                result_img = self.handle_approx_line(approx_res , result_img , boxes ,True)
+                return result_img
