@@ -3,7 +3,7 @@ Description:
 FilePath: /beilu/src/Post_process.py
 Autor: Rainche
 Date: 2021-11-16 17:25:25
-LastEditTime: 2021-11-25 22:19:56
+LastEditTime: 2021-11-30 19:56:43
 '''
 import cv2
 import numpy as np
@@ -21,13 +21,82 @@ class Logger(object):
     def flush(self):
         pass
 
+class KalmanFilter():
+    kf = cv2.KalmanFilter(4, 4)
+    kf.measurementMatrix = np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]], np.float32)
+    kf.transitionMatrix = np.array([[1, 0, 1, 0], [0, 1, 0, 1], [0, 0, 1, 0], [0, 0, 0, 1]], np.float32)
+
+
+    def predict(self, line_info):
+        ''' This function estimates the position of the object'''
+        # measured = np.array([[np.float32(line_info[0])], [np.float32(line_info[1])], [np.float32(line_info[2])], [np.float32(line_info[3])]])
+        measured = np.array(line_info)
+        self.kf.correct(measured)
+        predicted = self.kf.predict()
+        predict_line_info = [predicted[0] , predicted[1] , predicted[2], predicted[3]]
+        return predict_line_info
+
+
 class Post_processer():
     def __init__(self):
         self.buffer_len = 3
         self.area_info = deque(maxlen=3)
         self.warning_info = deque(maxlen=3)
-        self.logger = Logger('post_record.txt')
+        # the record location is connected with console location
+        self.logger = Logger('src/kalman_record.txt')
+        self.first_frame = True
+        self.kf = KalmanFilter()
+        self.state = np.zeros(4, np.float32)
+        self.meas = np.zeros(4, np.float32)
         print('Post processer initialized')
+
+    def kalman(self , line_info ) :
+        if len(line_info) < 4 :
+            return line_info     
+        __console__ = sys.stdout
+        sys.stdout = self.logger
+        print('enter kalman')
+        predicted = self.kf.predict(line_info)
+        print('old line_info:' , line_info , ' === new line_info : ' , predicted)
+        sys.stdout = __console__
+        return predicted
+        # current measurement
+        # * from now
+        # self.meas = line_info
+        # if self.first_frame :
+        #     for i in range(len(self.kalman_filter.errorCovPre)):
+        #         self.kalman_filter.errorCovPre[i,i] = 1
+        #     self.state = self.meas
+        #     self.kalman_filter.statePost = self.state
+        #     self.first_frame = False
+        # else :
+        #     self.state = self.kalman_filter.predict()
+        #     self.kalman_filter.correct(self.meas) #Kalman修正
+        # return self.state
+        # * to here
+        # # 状态向量维度  观测向量维度  控制向量维度
+        # kf = cv2.KalmanFilter(stateSize,measSize,coutrSize)
+        # state = np.zeros(stateSize, np.float32)#[x,y,v_x,v_y,w,h],簇心位置，速度，高宽
+        # meas = np.zeros(measSize, np.float32)#[z_x,z_y,z_w,z_h]
+        # procNoise = np.zeros(stateSize, np.float32)
+        # # 状态转移矩阵 生成单位矩阵
+        # cv2.setIdentity(kf.transitionMatrix)
+        # # 观测矩阵
+        # kf.measurementMatrix = np.zeros((measSize,stateSize),np.float32)
+        # kf.measurementMatrix[0,0]=1.0
+        # kf.measurementMatrix[1,1]=1.0
+        # kf.measurementMatrix[2,4]=1.0
+        # kf.measurementMatrix[3,5]=1.0
+        # #  预测噪声
+        # cv2.setIdentity(kf.processNoiseCov)
+        # kf.processNoiseCov[0,0] = 1e-2
+        # kf.processNoiseCov[1,1] = 1e-2
+        # kf.processNoiseCov[2,2] = 5.0
+        # kf.processNoiseCov[3,3] = 5.0
+        # kf.processNoiseCov[4,4] = 1e-2
+        # kf.processNoiseCov[5,5] = 1e-2
+        # #测量噪声
+        # cv2.setIdentity(kf.measurementNoiseCov)
 
     def refresh_buffer(self , warning_tag , flag):
         # empty buffer
@@ -170,19 +239,36 @@ class Post_processer():
         # print('final points' , final_points)
         return final_points 
 
-    def handle_approx_line(self , approx , img , boxes , compare = False):
-        [vx, vy, x, y] = cv2.fitLine(approx, cv2.DIST_L2, 0, 0.01, 0.01)
+    def handle_approx_line(self , line_info , img , boxes , discrete_sample = False , use_kalman = False):
+        if len(line_info) != 4 :
+            return img
         rows, cols = img.shape[:2]
+        [vx, vy, x, y] = line_info
         if vx == 0 :
             vx += 0.0001
         if vy == 0 :
             vy += 0.0001
         k = vy/vx 
         b = y - k * x
-        left_y = int((-x*vy/vx) + y)
-        right_y = int(((cols-x)*vy/vx) + y)
-        top_x = int(x - y*vx/vy)
-        bottom_x = int(x + (rows - y)*vx/vy)
+
+        if use_kalman :
+            temp = []
+            temp.append(cols/4 + x)
+            temp.append((cols/4 + x)*k + b)
+            temp.append(x)
+            temp.append(y)
+            # predicted = self.kalman([cols/4 + x , (cols/4 + x)*k + b ,  x , y ])
+            predicted = self.kalman(temp)
+            if predicted[0] != predicted[2] :
+                k = (predicted[3] - predicted[1]) / (predicted[2] - predicted[0])
+                b = predicted[3] - k*predicted[2]
+                x = predicted[2]
+                y = predicted[3]
+        
+        left_y = int((-x*k) + y)
+        right_y = int(((cols-x)*k) + y)
+        top_x = int(x - y/k)
+        bottom_x = int(x + (rows - y)/k)
         # cv2.line(img, (top_x, int(0)), (bottom_x, int(rows - 1)), (0, 255, 0), 4)
 
         vertex = []
@@ -193,10 +279,12 @@ class Post_processer():
             if y[1] >= 0 and y[1] <= rows:
                 vertex.append(y)
         if len(vertex) >= 2 :
-            if compare == False :
-                cv2.line(img, vertex[0], vertex[1], (0, 255, 0), 4)
-            else :
+            if discrete_sample == True :
                 cv2.line(img, vertex[0], vertex[1], (255, 0, 0), 4)
+            elif use_kalman == True :
+                cv2.line(img, vertex[0], vertex[1], (0, 0, 255), 4)
+            else :
+                cv2.line(img, vertex[0], vertex[1], (0, 255, 0), 4)
         Vertex = np.array(vertex)
 
         midpoint = (Vertex.mean(axis=0)).astype(np.int16)
@@ -263,11 +351,13 @@ class Post_processer():
         if len(approx_res) <= 0 :
             return img
         else :
-            result_img = self.handle_approx_line(approx_res , img , boxes ,False)
-            # return result_img
-            approx_res = self.discrete_sample(approx_res)
-            if len(approx_res) <= 0 :
-                return result_img
-            else :
-                result_img = self.handle_approx_line(approx_res , result_img , boxes ,True)
-                return result_img
+            line_info = cv2.fitLine(approx_res, cv2.DIST_L2, 0, 0.01, 0.01)
+            result_img = self.handle_approx_line(line_info , img , boxes , discrete_sample = False , use_kalman = False)
+            result_img = self.handle_approx_line(line_info , result_img , boxes , discrete_sample = False , use_kalman = True)  # for kalman filter test
+            return result_img
+            # approx_res = self.discrete_sample(approx_res)
+            # if len(approx_res) <= 0 :
+            #     return result_img
+            # else :
+            #     result_img = self.handle_approx_line(approx_res , result_img , boxes ,True)
+            #     return result_img
