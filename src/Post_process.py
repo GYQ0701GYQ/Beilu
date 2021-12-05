@@ -3,7 +3,7 @@ Description:
 FilePath: /beilu/src/Post_process.py
 Autor: Rainche
 Date: 2021-11-16 17:25:25
-LastEditTime: 2021-11-30 19:56:43
+LastEditTime: 2021-12-05 13:40:51
 '''
 import cv2
 import numpy as np
@@ -25,6 +25,8 @@ class KalmanFilter():
     kf = cv2.KalmanFilter(4, 4)
     kf.measurementMatrix = np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]], np.float32)
     kf.transitionMatrix = np.array([[1, 0, 1, 0], [0, 1, 0, 1], [0, 0, 1, 0], [0, 0, 0, 1]], np.float32)
+    kf.processNoiseCov = np.array([[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],np.float32)*0.05
+    kf.measurementNoiseCov = np.array([[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],np.float32)*0.01
 
 
     def predict(self, line_info):
@@ -36,14 +38,13 @@ class KalmanFilter():
         predict_line_info = [predicted[0] , predicted[1] , predicted[2], predicted[3]]
         return predict_line_info
 
-
 class Post_processer():
     def __init__(self):
         self.buffer_len = 3
         self.area_info = deque(maxlen=3)
         self.warning_info = deque(maxlen=3)
         # the record location is connected with console location
-        self.logger = Logger('src/kalman_record.txt')
+        self.logger = Logger('src/buffer_merge.txt')
         self.first_frame = True
         self.kf = KalmanFilter()
         self.state = np.zeros(4, np.float32)
@@ -98,69 +99,38 @@ class Post_processer():
         # #测量噪声
         # cv2.setIdentity(kf.measurementNoiseCov)
 
-    def refresh_buffer(self , warning_tag , flag):
+    def refresh_buffer(self , buffer , current_info):
         # empty buffer
-        if len(self.warning_info) == 0 and warning_tag is not None :
-            self.warning_info.append(warning_tag)
+        if len(buffer) == 0 and current_info is not None :
+            buffer.append(current_info)
         # one element
-        elif len(self.warning_info) == 1 and warning_tag is not None :
-            if self.warning_info[0] != warning_tag :
-                temp = self.warning_info[0]
-                self.warning_info.append(warning_tag)
-                warning_tag = temp
+        elif len(buffer) == 1 and current_info is not None :
+            if buffer[0] != current_info :
+                temp = buffer[0]
+                buffer.append(current_info)
+                current_info = temp
             else :
-                self.warning_info.append(warning_tag)
+                buffer.append(current_info)
         # two or more elements
-        elif len(self.warning_info) <= self.buffer_len and warning_tag is not None :
-            if self.warning_info[0] == warning_tag :
-                for i in range(1,len(self.warning_info)) :
-                    self.warning_info[i] = self.warning_info[0]
-                self.warning_info.append(warning_tag)
-            elif self.warning_info[len(self.warning_info) - 1] == warning_tag :
-                for i in range(0,len(self.warning_info)-2) :
-                    if self.warning_info[i] != self.warning_info[len(self.warning_info) - 1] :
-                        self.warning_info[i] = self.warning_info[0]
-                temp = self.warning_info[0]
-                self.warning_info.append(warning_tag)
-                warning_tag = temp
+        elif len(buffer) <= self.buffer_len and current_info is not None :
+            if buffer[0] == current_info :
+                for i in range(1,len(buffer)) :
+                    buffer[i] = buffer[0]
+                buffer.append(current_info)
+            elif buffer[len(buffer) - 1] == current_info :
+                for i in range(0,len(buffer)-2) :
+                    if buffer[i] != buffer[len(buffer) - 1] :
+                        buffer[i] = buffer[0]
+                temp = buffer[0]
+                buffer.append(current_info)
+                current_info = temp
             else :
-                for i in range(1,len(self.warning_info)) :
-                    self.warning_info[i] = self.warning_info[0]
-                temp = self.warning_info[0]
-                self.warning_info.append(warning_tag)
-                warning_tag = temp
-
-        # empty buffer
-        if len(self.area_info) == 0 and flag is not None :
-            self.area_info.append(flag)
-        # one element
-        elif len(self.area_info) == 1 and flag is not None :
-            if self.area_info[0] != flag :
-                temp = self.area_info[0]
-                self.area_info.append(flag)
-                flag = temp
-            else :
-                self.area_info.append(flag)
-        # two or more elements
-        elif len(self.area_info) <= self.buffer_len and flag is not None :
-            if self.area_info[0] == flag :
-                for i in range(1,len(self.area_info)) :
-                    self.area_info[i] = self.area_info[0]
-                self.area_info.append(flag)
-            elif self.area_info[len(self.area_info) - 1] == flag :
-                for i in range(0,len(self.area_info)-2) :
-                    if self.area_info[i] != self.area_info[len(self.area_info) - 1] :
-                        self.area_info[i] = self.area_info[0]
-                temp = self.area_info[0]
-                self.area_info.append(flag)
-                flag = temp
-            else :
-                for i in range(1,len(self.area_info)) :
-                    self.area_info[i] = self.area_info[0]
-                temp = self.area_info[0]
-                self.area_info.append(flag)
-                flag = temp
-        return warning_tag , flag
+                for i in range(1,len(buffer)) :
+                    buffer[i] = buffer[0]
+                temp = buffer[0]
+                buffer.append(current_info)
+                current_info = temp
+        return current_info
 
     def inflation_corrosion(self , mask , threshold_point , area ):
         kernel = np.ones(area , np.uint8)
@@ -317,17 +287,18 @@ class Post_processer():
                         warning_tag = 'warning'
                         break
 
-        # if ( warning_tag is not None ) or ( flag is not None ) :
-        #     old_warning = warning_tag
-        #     old_flag = flag
-        #     warning_tag , flag = self.refresh_buffer(warning_tag , flag)
-        #     __console__ = sys.stdout
-        #     sys.stdout = self.logger
-        #     if len(self.area_info) > 0 and len(self.warning_info) > 0 :
-        #         print('old warning and flag:' , old_warning , old_flag , ' === new buffer : ' , self.warning_info , self.area_info , '=== new result: ' , warning_tag , flag)
-        #     else :
-        #         print('old warning and flag:' , old_warning , old_flag  , '=== new result: ' , warning_tag , flag)
-        #     sys.stdout = __console__
+        if ( warning_tag is not None ) or ( flag is not None ) :
+            old_warning = warning_tag
+            old_flag = flag
+            warning_tag = self.refresh_buffer(self.warning_info , warning_tag)
+            flag = self.refresh_buffer(self.area_info , flag)
+            __console__ = sys.stdout
+            sys.stdout = self.logger
+            if len(self.area_info) > 0 and len(self.warning_info) > 0 :
+                print('old warning and flag:' , old_warning , old_flag , ' === new buffer : ' , self.warning_info , self.area_info , '=== new result: ' , warning_tag , flag)
+            else :
+                print('old warning and flag:' , old_warning , old_flag  , '=== new result: ' , warning_tag , flag)
+            sys.stdout = __console__
         
         if warning_tag == 'safe' :
             result_img = cv2.putText(img, 'safe' , (10,200 ), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 0), 4)
@@ -353,7 +324,7 @@ class Post_processer():
         else :
             line_info = cv2.fitLine(approx_res, cv2.DIST_L2, 0, 0.01, 0.01)
             result_img = self.handle_approx_line(line_info , img , boxes , discrete_sample = False , use_kalman = False)
-            result_img = self.handle_approx_line(line_info , result_img , boxes , discrete_sample = False , use_kalman = True)  # for kalman filter test
+            # result_img = self.handle_approx_line(line_info , result_img , boxes , discrete_sample = False , use_kalman = True)  # for kalman filter test
             return result_img
             # approx_res = self.discrete_sample(approx_res)
             # if len(approx_res) <= 0 :
